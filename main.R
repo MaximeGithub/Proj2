@@ -44,8 +44,14 @@ normalizationType = "standard"  #"standard" or "rolling"
 rangeAmounts = c(5, 20, 50, 100)
 listLags = c(1, 20, 50, 100)
 listEwma = c(0, 10, 30)
-numBucketsVolatility = 4
-alphaElasticNet = 1 # 1 is lasso
+rangeAmounts = c(5, 20)
+listLags = c(1, 20)
+listEwma = c(0, 10)
+#rangeAmounts = c(5, 10, 20)
+#listLags = c(1, 10, 30)
+#listEwma = c(0, 10, 30)
+numBucketsVolatility = 1
+alphaElasticNet = 0 # 1 is lasso
 
 ########### create validation and test sets ##############
 folds <- cut(seq(1,nrow(data)),breaks=20,labels=FALSE)
@@ -69,50 +75,14 @@ capLimits = calibrateCapAndFloorsForAllSignals(dataLimits, rangeAmounts, listLag
 cat("\n\n#############   Computing signals for cross-validation ###################\n")
 signals = computeSignalsAndApplyLimits(dataCV, rangeAmounts, listLags, listEwma, capLimits, normalizationType)
 
-##############test new signals
-basicSignals = createBasicSignals(dataCV, rangeAmounts, listLags)
-basicSignals[is.na(basicSignals)] = 0
-movingAverageSignals = computeMovingAverage(basicSignals, listEwma)
-df = cbind(movingAverageSignals, yCV)
-cols = c(names(df)[grep("diff_weighted", names(df))],names(df)[grep("diff_mid", names(df))], names(df)[grep("arrivalDeparture", names(df))],"y")
-df2=df[,cols,with=F]
-bidSize = dataCV[,c(names(dataCV)[grep("bid_size", names(dataCV))]),with=F]
-askSize = dataCV[,c(names(dataCV)[grep("ask_size", names(dataCV))]),with=F]
-askCumSize = data.table(t(apply(askSize, 1, cumsum)))
-bidCumSize = data.table(t(apply(bidSize, 1, cumsum)))
-newDf= (askCumSize - bidCumSize) / (askCumSize + bidCumSize)
-df2=cbind(df2,newDf[,1:5])
-df2[is.na(df2)]=0
-#df2[,deltaDiff10:=diff_weighted_5_ewma_0 - diff_weighted_5_ewma_10][,deltaDiff50:=diff_weighted_10_ewma_0 - diff_weighted_5_ewma_50][,deltaDiff100:=diff_weighted_10_ewma_0 - diff_weighted_5_ewma_100]
-mod = lm(y~.-1,data=df2)
-mod2=glmnet(as.matrix(df2[,!"y"]), df2$y, alpha = 1, standardize = FALSE, intercept=FALSE)
-summary(mod)
-
-ystdLim = runSD(signalsLimits$diff_mid_1, 1000)
-ystd = runSD(df2$diff_mid_1_ewma_0, 1000)
-q = quantile(ystdLim,seq(0,1,0.2),na.rm=T)
-q[1] = 0
-q[6] = 500
-buckets <- cut(ystd, breaks = q, labels = c(1,2,3,4,5))
-buck = 5
-mod = lm(y~.-1,data=df2[buckets==buck])
-mod2=glmnet(as.matrix(df2[buckets==buck,!"y"]), df2[buckets==buck,y], alpha = 1, standardize = FALSE, intercept=FALSE)
-summary(mod)
-
 ############ run cross validation #######################
-df = diff((dataLimits[["ask_price_1"]] + dataLimits[["bid_price_1"]])/2)
-df = df / runSD(df, 1000)
-ystdLim = runSD(df, 1000)
-ystd = runSD(signals$diff_mid_1_ewma_0, 1000)
-q = quantile(ystdLim,seq(0,1,0.2),na.rm=T)
-q[1] = 0
-q[6] = 500
-buckets <- cut(ystd, breaks = q, labels = c(1,2,3,4,5))
-
-
-
 cat("\n\n#############   Running cross validation ###################")
 crossValidationDfOrig = cbind(signals, yCV)
+correl =cor(crossValidationDfOrig)
+correl [!lower.tri(correl )]=0
+predictors = apply(abs(correl),1,max)
+predictors = names(crossValidationDfOrig)[predictors<0.8]
+crossValidationDfOrig = crossValidationDfOrig[,predictors,with=F]
 crossValidationDfOrig[["volatility"]] = computeVolatility(dataCV)
 crossValidationDfOrig[["buckets"]] <- cut(crossValidationDfOrig[["volatility"]], breaks = capLimits[["volatility"]], labels = seq(1, numBucketsVolatility))
 #cols = c(names(crossValidationDf)[grep("mid", names(crossValidationDf))],"y")
@@ -128,7 +98,6 @@ for (buck in seq(1,numBucketsVolatility)){
 	squared_error <- data.table()
 	pred_temp <- c()
 	returns_temps <- c()
-	lambda=seq(0,0.02,0.001)
 	lambda=NULL
 	for(i in seq(1,cv_nfolds)){
 		print(i)
@@ -145,13 +114,17 @@ for (buck in seq(1,numBucketsVolatility)){
 		squared_error = rbind(squared_error, data.table(error2))
 	}
 	res = apply(squared_error, 2, mean)
-	#plot(lambda, res)
-	
+	std = apply(squared_error, 2, sd) / nrow(squared_error)
 	bestLambda = lambda[which.min(res)]
-	rsquared   = 1 - res[which.min(res)] / mean(returns_temps^2)
-	coefs      = as.matrix(coef(model)[-1,])[,which.min(res)]
+	se1Lambda = max(lambda[res < min(res) + std[which.min(res)]])
+	se1LambdaIdx = which(lambda==se1Lambda)
+	#plot(lambda[80:length(lambda)], res[80:length(res)])
+	
+	
+	rsquared   = 1 - res[se1LambdaIdx] / mean(returns_temps^2)
+	coefs      = as.matrix(coef(model)[-1,])[,se1LambdaIdx]
 	coefsTable[[buck]] = coefs
-	modelPrediction=c(modelPrediction, as.matrix(pred_temp)[,which.min(res)])
+	modelPrediction=c(modelPrediction, as.matrix(pred_temp)[,se1LambdaIdx])
 	actualReturn = c(actualReturn, returns_temps)
 }
 #plot(model$glmnet.fit, "norm",   label=TRUE)
@@ -163,6 +136,8 @@ names(coefsTable) = sapply(seq(1, numBucketsVolatility), function(x) paste0("mod
 rsquared = 1-var(modelPrediction-actualReturn) / var(actualReturn)
 print(paste0("The explained variance on the test set is ",round(rsquared*100,2),"%."))
 
+pred = data.table(as.matrix(crossValidationDfOrig[, !"y"]) %*% as.matrix(coefsTable))
+coefs[order(abs(coefs),decreasing=T)]
 ################ compute statistics per bucket #################
 finalPred = pred_temp[[names(pred_temp)[which.min(res)]]]
 stats     = data.table(pred=finalPred, ret=returns_temps)
