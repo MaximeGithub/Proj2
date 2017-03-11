@@ -43,13 +43,14 @@ rm(list=c("askRate", "bidRate", "askSize", "bidSize"))
 rangeAmounts = c(5, 20, 50, 100)
 listLags = c(1)
 listEwma = c(0, 10, 30)
+numBucketsVolatility = 5
 alphaElasticNet = 1 # 1 is lasso
 
 ########### create validation and test sets ##############
 folds <- cut(seq(1,nrow(data)),breaks=20,labels=FALSE)
-capAndLimitFolds = c(1)
-crossValidationFolds = 2:16
-crossValidationFolds = 2:12 ################################################################ testing purpose only
+capAndLimitFolds = 1:2
+crossValidationFolds = 3:16
+#crossValidationFolds = 2:9 ################################################################ testing purpose only
 testingFolds = 17:20
 
 dataLimits = data[folds %in% capAndLimitFolds]
@@ -63,7 +64,7 @@ yTest = y[folds %in% testingFolds]
 
 ############# compute limits and signals ####################
 cat("\n\n#############   Calibrating the limits ###################\n")
-capLimits = calibrateCapAndFloorsForAllSignals(dataLimits, rangeAmounts, listLags, listEwma)
+capLimits = calibrateCapAndFloorsForAllSignals(dataLimits, rangeAmounts, listLags, listEwma, numBucketsVolatility)
 cat("\n\n#############   Computing signals for cross-validation ###################\n")
 signals = computeSignalsAndApplyLimits(dataCV, rangeAmounts, listLags, listEwma, capLimits)
 
@@ -89,44 +90,78 @@ mod = lm(y~.-1,data=df2)
 mod2=glmnet(as.matrix(df2[,!"y"]), df2$y, alpha = 1, standardize = FALSE, intercept=FALSE)
 summary(mod)
 
+ystdLim = runSD(signalsLimits$diff_mid_1, 1000)
+ystd = runSD(df2$diff_mid_1_ewma_0, 1000)
+q = quantile(ystdLim,seq(0,1,0.2),na.rm=T)
+q[1] = 0
+q[6] = 500
+buckets <- cut(ystd, breaks = q, labels = c(1,2,3,4,5))
+buck = 5
+mod = lm(y~.-1,data=df2[buckets==buck])
+mod2=glmnet(as.matrix(df2[buckets==buck,!"y"]), df2[buckets==buck,y], alpha = 1, standardize = FALSE, intercept=FALSE)
+summary(mod)
+
 ############ run cross validation #######################
+df = diff((dataLimits[["ask_price_1"]] + dataLimits[["bid_price_1"]])/2)
+df = df / runSD(df, 1000)
+ystdLim = runSD(df, 1000)
+ystd = runSD(signals$diff_mid_1_ewma_0, 1000)
+q = quantile(ystdLim,seq(0,1,0.2),na.rm=T)
+q[1] = 0
+q[6] = 500
+buckets <- cut(ystd, breaks = q, labels = c(1,2,3,4,5))
+
+
+
 cat("\n\n#############   Running cross validation ###################")
-crossValidationDf = cbind(signals, yCV)
+crossValidationDfOrig = cbind(signals, yCV)
+crossValidationDfOrig[["volatility"]] = computeVolatility(dataCV)
+crossValidationDfOrig[["buckets"]] <- cut(crossValidationDfOrig[["volatility"]], breaks = capLimits[["volatility"]], labels = seq(1, numBucketsVolatility))
 #cols = c(names(crossValidationDf)[grep("mid", names(crossValidationDf))],"y")
 #crossValidationDf = crossValidationDf[,cols,with=F]
-cv_nfolds = 10
-cv_folds <- cut(seq(1,nrow(crossValidationDf)),breaks=cv_nfolds,labels=FALSE)
-squared_error <- data.table()
-pred_temp <- c()
-returns_temps <- c()
-lambda=seq(0,0.02,0.001)
-lambda=NULL
-for(i in seq(1,cv_nfolds)){
-	print(i)
-	training <- crossValidationDf[cv_folds!=i]
-	valid <- crossValidationDf[cv_folds==i]
-	model <- glmnet(as.matrix(training[,!"y"]), training$y, alpha = alphaElasticNet, lambda = lambda, standardize = FALSE, intercept=FALSE)
-	lambda = model$lambda
-	# predictions = as.matrix(valid[, !"returns"]) %*% as.matrix(coef(model)[-1,])
-	predictions = predict(model, as.matrix(valid[, !"y"]))
-	error = predictions - valid$y
-	pred_temp <- rbind(pred_temp,predictions)
-	returns_temps <- c(returns_temps, valid$y)
-	error2 = error^2
-	squared_error = rbind(squared_error, data.table(error2))
+modelPrediction = c()
+actualReturn = c()
+coefsTable = data.table(index=1:(ncol(crossValidationDfOrig)-3))
+for (buck in seq(1,numBucketsVolatility)){
+	cat("\n\n#############   Calibrating model for bucket ###################")
+	crossValidationDf = crossValidationDfOrig[buckets==buck,!"buckets"][,!"volatility"]
+	cv_nfolds = 10
+	cv_folds <- cut(seq(1,nrow(crossValidationDf)),breaks=cv_nfolds,labels=FALSE)
+	squared_error <- data.table()
+	pred_temp <- c()
+	returns_temps <- c()
+	lambda=seq(0,0.02,0.001)
+	lambda=NULL
+	for(i in seq(1,cv_nfolds)){
+		print(i)
+		training <- crossValidationDf[cv_folds!=i]
+		valid <- crossValidationDf[cv_folds==i]
+		model <- glmnet(as.matrix(training[,!"y"]), training$y, alpha = alphaElasticNet, lambda = lambda, standardize = FALSE, intercept=FALSE)
+		lambda = model$lambda
+		# predictions = as.matrix(valid[, !"returns"]) %*% as.matrix(coef(model)[-1,])
+		predictions = predict(model, as.matrix(valid[, !"y"]))
+		error = predictions - valid$y
+		pred_temp <- rbind(pred_temp,predictions)
+		returns_temps <- c(returns_temps, valid$y)
+		error2 = error^2
+		squared_error = rbind(squared_error, data.table(error2))
+	}
+	res = apply(squared_error, 2, mean)
+	#plot(lambda, res)
+	
+	bestLambda = lambda[which.min(res)]
+	rsquared   = 1 - res[which.min(res)] / mean(returns_temps^2)
+	coefs      = as.matrix(coef(model)[-1,])[,which.min(res)]
+	coefsTable[[buck]] = coefs
+	modelPrediction=c(modelPrediction, as.matrix(pred_temp)[,which.min(res)])
+	actualReturn = c(actualReturn, returns_temps)
 }
-res = apply(squared_error, 2, mean)
-plot(lambda, res)
-
-bestLambda = lambda[which.min(res)]
-rsquared   = 1 - res[which.min(res)] / mean(returns_temps^2)
-coefs      = as.matrix(coef(model)[-1,])[,which.min(res)]
-
 #plot(model$glmnet.fit, "norm",   label=TRUE)
 
-pred_temp = data.table(pred_temp)
-correl    = cor(pred_temp[[names(pred_temp)[which.min(res)]]], returns_temps)
-accuracy  = sum(pred_temp[[names(pred_temp)[which.min(res)]]] * returns_temps > 0) / sum(returns_temps!=0)
+#pred_temp = data.table(pred_temp)
+#correl    = cor(pred_temp[[names(pred_temp)[which.min(res)]]], returns_temps)
+#accuracy  = sum(pred_temp[[names(pred_temp)[which.min(res)]]] * returns_temps > 0) / sum(returns_temps!=0)
+rsquared = 1-var(modelPrediction-actualReturn) / var(actualReturn)
 print(paste0("The explained variance on the test set is ",round(rsquared*100,2),"%."))
 
 ################ compute statistics per bucket #################

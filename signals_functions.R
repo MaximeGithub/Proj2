@@ -121,7 +121,7 @@ capFloorColumns <- function(DT, columns, listLimits){
 }
 
 
-calibrateCapAndFloorsForAllSignals = function(df_data, vector_rangeAmounts, vector_lags, vector_ewma){
+calibrateCapAndFloorsForAllSignals = function(df_data, vector_rangeAmounts, vector_lags, vector_ewma, numBucketsVolatility){
 	basicSignals = createBasicSignals(df_data, vector_rangeAmounts, vector_lags)
 	cappedBasicSignals = capAndFloorBasicSignals(basicSignals)
 	movingAverageSignals = computeMovingAverage(cappedBasicSignals, vector_ewma)
@@ -130,6 +130,8 @@ calibrateCapAndFloorsForAllSignals = function(df_data, vector_rangeAmounts, vect
 	capSignals = capFloorColumns(normalizedSignals, names(normalizedSignals), signalsLimits)
 	capSignals[is.na(capSignals)] = 0
 	listLimits = getLimitsFromFinalSignals(cappedBasicSignals, capSignals)
+	volatilityBuckets = computeVolatilityBuckets(df_data, numBucketsVolatility)
+	listLimits["volatility"] = list(volatilityBuckets)
 	return(listLimits)
 }
 
@@ -220,4 +222,19 @@ computeMovingAverage = function(df_signals, vector_ewma){
 	}
 	df_result[,index:=NULL]
 	return(df_result)
+}
+
+computeVolatilityBuckets = function(df_data, numBucketsVolatility){
+	volatility = computeVolatility(df_data)
+	q = quantile(volatility,seq(0,1, 1/numBucketsVolatility),na.rm=T)
+	return(q)
+}
+
+computeVolatility = function(df_data){
+	df_askRate = df_data[,c(names(df_data)[grep("ask_price", names(df_data))]),with=F]
+	df_bidRate = df_data[,c(names(df_data)[grep("bid_price", names(df_data))]),with=F]
+	mid = (df_bidRate[["bid_price_1"]] + df_askRate[["ask_price_1"]]) / 2
+	return = c(NA, diff(mid))
+	volatility = runSD(return, 1000)
+	return(volatility)
 }
