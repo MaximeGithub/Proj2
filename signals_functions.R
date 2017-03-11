@@ -76,6 +76,19 @@ createfirstLevelImbalance = function(df_askRate, df_askSize, df_bidRate, df_bidS
 	return (data.table(obImbalance = obImbalance))
 }
 
+createVolumeImbalance = function(df_askSize, df_bidSize){
+	print("Computing volume imbalance")
+	ptm = Sys.time()
+	askCumSize = data.table(t(apply(df_askSize, 1, cumsum)))
+	bidCumSize = data.table(t(apply(df_bidSize, 1, cumsum)))
+	df_imbalance = (askCumSize - bidCumSize) / (askCumSize + bidCumSize)
+	df_imbalance=df_imbalance[,1:5]
+	df_imbalance[is.na(df_imbalance)]=0
+	names(df_imbalance) = sapply(seq(1,5), function(x) paste0("volume_imbalance_", x))
+	cat(paste("Volume imbalance computed in", round(Sys.time() - ptm,2), "seconds.\n"))
+	return (df_imbalance)
+}
+
 applyLimitsToWeightedPrices = function(df_weightedPrices, list_limits){
 	cols = c(names(df_weightedPrices)[grep("diff", names(df_weightedPrices))])
 	df_weightedPrices = capFloorColumns(df_weightedPrices, cols, list_limits)
@@ -121,17 +134,19 @@ capFloorColumns <- function(DT, columns, listLimits){
 }
 
 
-calibrateCapAndFloorsForAllSignals = function(df_data, vector_rangeAmounts, vector_lags, vector_ewma, numBucketsVolatility){
+calibrateCapAndFloorsForAllSignals = function(df_data, vector_rangeAmounts, vector_lags, vector_ewma, numBucketsVolatility, str_normalizationType){
 	basicSignals = createBasicSignals(df_data, vector_rangeAmounts, vector_lags)
 	cappedBasicSignals = capAndFloorBasicSignals(basicSignals)
 	movingAverageSignals = computeMovingAverage(cappedBasicSignals, vector_ewma)
-	normalizedSignals = normalizeSignals(movingAverageSignals)
+	if (str_normalizationType == "standard") {list_stdev = computeStandardDev(movingAverageSignals)}
+	normalizedSignals = normalizeSignals(movingAverageSignals, str_normalizationType, list_stdev)
 	signalsLimits = computeLimits(normalizedSignals, names(normalizedSignals), c(0.01, 0.99))
 	capSignals = capFloorColumns(normalizedSignals, names(normalizedSignals), signalsLimits)
 	capSignals[is.na(capSignals)] = 0
 	listLimits = getLimitsFromFinalSignals(cappedBasicSignals, capSignals)
 	volatilityBuckets = computeVolatilityBuckets(df_data, numBucketsVolatility)
 	listLimits["volatility"] = list(volatilityBuckets)
+	if (str_normalizationType == "standard") {listLimits["stdev"] = list(list_stdev)}
 	return(listLimits)
 }
 
@@ -144,7 +159,8 @@ createBasicSignals = function(df_data, vector_rangeAmounts, vector_lags){
 	pastReturns = createPastReturns(df_askRate, df_bidRate, vector_lags)
 	arrivalDeparture = createArrivalDeparture(df_askRate, df_askSize, df_bidRate, df_bidSize)
 	#firstLevelImbalance = createfirstLevelImbalance(df_askRate, df_askSize, df_bidRate, df_bidSize)
-	signals = cbind(weightedPrices, pastReturns, arrivalDeparture)
+	volumeImbalance = createVolumeImbalance(df_askSize, df_bidSize)
+	signals = cbind(weightedPrices, pastReturns, arrivalDeparture, volumeImbalance)
 	return(signals)
 }
 
@@ -164,12 +180,19 @@ capAndFloorBasicSignals = function(df_basicSignals){
 	return(signals)
 }
 
-normalizeSignals = function(df_cappedBasicSignals){
+normalizeSignals = function(df_cappedBasicSignals, str_normalizationType, list_stdev){
 	cols = names(df_cappedBasicSignals)
 	df_normalizedSignals = df_cappedBasicSignals
-	for (d in cols){
-		stdev = runSD(df_normalizedSignals[[d]], 1000)
-		df_normalizedSignals[[d]]= df_normalizedSignals[[d]] / stdev
+	if (str_normalizationType == "rolling") {
+		for (d in cols){
+			stdev = runSD(df_normalizedSignals[[d]], 1000)
+			df_normalizedSignals[[d]]= df_normalizedSignals[[d]] / stdev
+		}
+	} else if (str_normalizationType == "standard"){
+		for (d in cols){
+			stdev = list_stdev[[d]]
+			df_normalizedSignals[[d]]= df_normalizedSignals[[d]] / stdev
+		}
 	}
 	return(df_normalizedSignals)
 }
@@ -203,21 +226,28 @@ capSignalsFromLimits = function(df_basicSignals, list_limits){
 	return(signals)
 }
 
-computeSignalsAndApplyLimits = function(df_data, vector_rangeAmounts, vector_lags, vector_ewma, list_limits){
+computeSignalsAndApplyLimits = function(df_data, vector_rangeAmounts, vector_lags, vector_ewma, list_limits, str_normalizationType){
 	basicSignals = createBasicSignals(df_data, vector_rangeAmounts, vector_lags)
 	cappedBasicSignals = capSignalsFromLimits(basicSignals, list_limits[["basic"]])
+	list_stdev = list()
 	movingAverageSignals = computeMovingAverage(cappedBasicSignals, vector_ewma)
-	normalizedSignals = normalizeSignals(movingAverageSignals)
+	if(str_normalizationType=="standard") {list_stdev =  list_limits[["stdev"]]}
+	normalizedSignals = normalizeSignals(movingAverageSignals, str_normalizationType, list_stdev)
 	capSignals = capFloorColumns(normalizedSignals, names(normalizedSignals), list_limits[["normalized"]])
 	capSignals[is.na(capSignals)] = 0
-	return(movingAverageSignals) ##############careful
+	#return(movingAverageSignals) ##############careful
+	return(capSignals)
 }
 
 computeMovingAverage = function(df_signals, vector_ewma){
 	df_result = data.table(index = 1:nrow(df_signals))
 	for (halfTime in vector_ewma){
 		for (col in names(df_signals)){
-			df_result[[paste0(col,"_ewma_", halfTime)]] = ewma(df_signals[[col]], halfTime = halfTime)
+			if (halfTime == 0) {
+				df_result[[paste0(col,"_ewma_", halfTime)]] = df_signals[[col]]
+			} else {
+				df_result[[paste0(col,"_ewma_", halfTime)]] = df_signals[[col]] - ewma(df_signals[[col]], halfTime = halfTime)
+			}
 		}
 	}
 	df_result[,index:=NULL]
@@ -235,6 +265,16 @@ computeVolatility = function(df_data){
 	df_bidRate = df_data[,c(names(df_data)[grep("bid_price", names(df_data))]),with=F]
 	mid = (df_bidRate[["bid_price_1"]] + df_askRate[["ask_price_1"]]) / 2
 	return = c(NA, diff(mid))
-	volatility = runSD(return, 1000)
+	volatility = runSD(return, 500)
 	return(volatility)
+}
+
+computeStandardDev = function(df_signals){
+	list_stdev = list()
+	cols = names(df_signals)
+	for (d in cols){
+		stdev = sd(df_signals[[d]])
+		list_stdev[[d]] = stdev
+	}
+	return(list_stdev)
 }

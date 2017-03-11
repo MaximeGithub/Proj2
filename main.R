@@ -40,10 +40,11 @@ rm(list=c("askRate", "bidRate", "askSize", "bidSize"))
 ############ parameters ################
 #rangeAmounts = c(10, 50)
 #listEwma = c(1,10,50,100)
+normalizationType = "standard"  #"standard" or "rolling"
 rangeAmounts = c(5, 20, 50, 100)
-listLags = c(1)
+listLags = c(1, 20, 50, 100)
 listEwma = c(0, 10, 30)
-numBucketsVolatility = 5
+numBucketsVolatility = 4
 alphaElasticNet = 1 # 1 is lasso
 
 ########### create validation and test sets ##############
@@ -64,14 +65,11 @@ yTest = y[folds %in% testingFolds]
 
 ############# compute limits and signals ####################
 cat("\n\n#############   Calibrating the limits ###################\n")
-capLimits = calibrateCapAndFloorsForAllSignals(dataLimits, rangeAmounts, listLags, listEwma, numBucketsVolatility)
+capLimits = calibrateCapAndFloorsForAllSignals(dataLimits, rangeAmounts, listLags, listEwma, numBucketsVolatility, normalizationType)
 cat("\n\n#############   Computing signals for cross-validation ###################\n")
-signals = computeSignalsAndApplyLimits(dataCV, rangeAmounts, listLags, listEwma, capLimits)
+signals = computeSignalsAndApplyLimits(dataCV, rangeAmounts, listLags, listEwma, capLimits, normalizationType)
 
 ##############test new signals
-signals[is.na(signals)] = 0
-signals[,test1:=diff_weighted_5_ewma_0 - diff_weighted_5_ewma_10][,test2:=diff_weighted_10_ewma_0 - diff_weighted_10_ewma_10][,test3:=diff_weighted_20_ewma_0 - diff_weighted_20_ewma_10]
-
 basicSignals = createBasicSignals(dataCV, rangeAmounts, listLags)
 basicSignals[is.na(basicSignals)] = 0
 movingAverageSignals = computeMovingAverage(basicSignals, listEwma)
@@ -123,7 +121,7 @@ modelPrediction = c()
 actualReturn = c()
 coefsTable = data.table(index=1:(ncol(crossValidationDfOrig)-3))
 for (buck in seq(1,numBucketsVolatility)){
-	cat("\n\n#############   Calibrating model for bucket ###################")
+	cat(paste0("\n\n#############   Calibrating model for bucket ", buck, " ###################\n"))
 	crossValidationDf = crossValidationDfOrig[buckets==buck,!"buckets"][,!"volatility"]
 	cv_nfolds = 10
 	cv_folds <- cut(seq(1,nrow(crossValidationDf)),breaks=cv_nfolds,labels=FALSE)
@@ -161,6 +159,7 @@ for (buck in seq(1,numBucketsVolatility)){
 #pred_temp = data.table(pred_temp)
 #correl    = cor(pred_temp[[names(pred_temp)[which.min(res)]]], returns_temps)
 #accuracy  = sum(pred_temp[[names(pred_temp)[which.min(res)]]] * returns_temps > 0) / sum(returns_temps!=0)
+names(coefsTable) = sapply(seq(1, numBucketsVolatility), function(x) paste0("model",x))
 rsquared = 1-var(modelPrediction-actualReturn) / var(actualReturn)
 print(paste0("The explained variance on the test set is ",round(rsquared*100,2),"%."))
 
@@ -174,14 +173,22 @@ results[order(-rank(bucket))]
 
 ############### compute results on test set ####################
 cat("\n\n#############  Checking generalization on test set ###################\n")
-test_set = computeSignalsAndApplyLimits(dataTest, rangeAmounts, listLags, listEwma, capLimits)
+test_set = computeSignalsAndApplyLimits(dataTest, rangeAmounts, listLags, listEwma, capLimits, normalizationType)
 test_set = cbind(test_set, yTest)
-model <- glmnet(as.matrix(crossValidationDf[,!"y"]), crossValidationDf$y, alpha = alphaElasticNet, lambda = bestLambda, standardize = FALSE, intercept=FALSE)
-predictions = as.matrix(test_set[, !"y"]) %*% as.matrix(coef(model)[-1,])
-error = predictions - test_set$y
+#model <- glmnet(as.matrix(crossValidationDf[,!"y"]), crossValidationDf$y, alpha = alphaElasticNet, lambda = bestLambda, standardize = FALSE, intercept=FALSE)
+#predictions = as.matrix(test_set[, !"y"]) %*% as.matrix(coef(model)[-1,])
+predictions = data.table(as.matrix(test_set[, !"y"]) %*% as.matrix(coefsTable))
+predictions[, volatility:=computeVolatility(dataTest)]
+predictions[["buckets"]] <- cut(predictions[["volatility"]], breaks = capLimits[["volatility"]], labels = seq(1, numBucketsVolatility))
+predictions[is.na(predictions)] = 1
+idx = predictions[["buckets"]]
+predictions= data.frame(predictions)
+predictions[["final"]] = predictions[cbind(seq_along(idx), idx)]
+finalPrediction = as.numeric(predictions[["final"]])
+error = finalPrediction - test_set$y
 error2 = error^2
 varianceExplained = 1 - mean(error2) / mean(test_set$y^2)
-correl = cor(predictions,test_set$y)
+correl = cor(finalPrediction,test_set$y)
 print(paste0("The explained variance on the test set is ",round(varianceExplained*100,2),"%."))
 
 ############## recalibrate model on whole dataset ################
