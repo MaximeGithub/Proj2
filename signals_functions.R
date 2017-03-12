@@ -40,6 +40,22 @@ createPastReturns = function(df_askRate, df_bidRate, vector_lags){
 	return(df_lags)	
 }
 
+createPastReturnsOld = function(df_weighted, vector_lags){
+	print("Computing past returns")
+	ptm = Sys.time()
+	cols = c(names(df_weighted)[grep("mid_weighted_", names(df_weighted))])
+	df_lags = data.table(index=1:dim(df_weighted)[1])
+	for (col in cols) {
+		print(paste("Compute past returns for column ",col))
+		for (lag in vector_lags){	
+			df_lags[[paste0("diff_",col, "_",lag)]] = c(rep(NA,lag),diff(df_weighted[[col]],lag))
+		}
+	}
+	df_lags[,index:=NULL]
+	cat(paste("Past returns computed in", round(Sys.time() - ptm,2), "seconds.\n"))
+	return(df_lags)	
+}
+
 createArrivalDepartureOld = function(df_askRate, df_askSize, df_bidRate, df_bidSize){
 	print("Computing arrival departure signal")
 	ptm = Sys.time()
@@ -93,7 +109,7 @@ createArrivalDeparture = function(df_askRate, df_askSize, df_bidRate, df_bidSize
 	ask_dep = ((df_diffAskRate > 0) | (df_diffAskSize < 0 & df_diffAskRate == 0))*1
 	bid_arr = ((df_diffBidRate > 0) | (df_diffBidSize > 0 & df_diffBidRate == 0))*1
 	bid_dep = ((df_diffBidRate < 0) | (df_diffBidSize < 0 & df_diffBidRate == 0))*1
-	
+		
 	#ask_arr = ((df_diffAskRate < 0) *  df_askSize) + (df_diffAskSize > 0 & (df_diffAskRate == 0)) * df_diffAskSize
 	#ask_dep = ((df_diffAskRate > 0) *  df_previousAskSize) - (df_diffAskSize < 0 & (df_diffAskRate == 0)) * df_diffAskSize
 	#bid_arr = ((df_diffBidRate > 0) *  df_bidSize) + (df_diffBidSize > 0 & (df_diffBidRate == 0)) * df_diffBidSize
@@ -105,19 +121,17 @@ createArrivalDeparture = function(df_askRate, df_askSize, df_bidRate, df_bidSize
 	names(arrival_departure) = sapply(seq(1,ncol(arrival_departure)),function(x) paste0("arrival_departure_level",x))
 	arrival_departure = arrival_departure[,c(1,2,3)]
 	cat(paste("Arrival departure signal computed in", round(Sys.time() - ptm,2), "seconds.\n"))
-	return (data.table(arrivalDeparture = arrival_departure))
+	return (arrival_departure)
 }
 
-createfirstLevelImbalance = function(df_askRate, df_askSize, df_bidRate, df_bidSize){
+createLevelImbalance = function(df_askRate, df_askSize, df_bidRate, df_bidSize){
 	print("Computing first level imbalance")
 	ptm = Sys.time()
-	vector_ask 	   = df_askRate$ask_price_1
-	vector_bid     = df_bidRate$bid_price_1
-	vector_askSize = df_askSize$ask_size_1
-	vector_bidSize = df_bidSize$bid_size_1
-	obImbalance = (vector_ask * vector_askSize + vector_bid * vector_bidSize) / (vector_askSize + vector_bidSize) - (vector_ask + vector_bid) / 2
-	cat(paste("First level imbalance computed in", round(Sys.time() - ptm,2), "seconds.\n"))
-	return (data.table(obImbalance = obImbalance))
+	obImbalance = sweep((df_askRate * df_askSize + df_bidRate * df_bidSize) / (df_askSize + df_bidSize), 1, (df_askRate$ask_price_1 + df_bidRate$bid_price_1) / 2,"-")
+	names(obImbalance) = sapply(seq(1,ncol(obImbalance)),function(x) paste0("obImbalance_level",x))
+	obImbalance[is.na(obImbalance)] = 0
+	cat(paste("Level imbalance computed in", round(Sys.time() - ptm,2), "seconds.\n"))
+	return (data.table(obImbalance))
 }
 
 createVolumeImbalance = function(df_askSize, df_bidSize){
@@ -206,9 +220,10 @@ createBasicSignals = function(df_data, vector_rangeAmounts, vector_lags){
 	df_bidSize = df_data[,c(names(df_data)[grep("bid_size", names(df_data))]),with=F]
 	df_askSize = df_data[,c(names(df_data)[grep("ask_size", names(df_data))]),with=F]
 	weightedPrices = createWeightedPrice(df_bidRate, df_bidSize, df_askRate, df_askSize, vector_rangeAmounts)
+	#pastReturns = createPastReturns(weightedPrices, vector_lags)
 	pastReturns = createPastReturns(df_askRate, df_bidRate, vector_lags)
 	arrivalDeparture = createArrivalDeparture(df_askRate, df_askSize, df_bidRate, df_bidSize)
-	#firstLevelImbalance = createfirstLevelImbalance(df_askRate, df_askSize, df_bidRate, df_bidSize)
+	#obImbalance = createLevelImbalance(df_askRate, df_askSize, df_bidRate, df_bidSize)
 	volumeImbalance = createVolumeImbalance(df_askSize, df_bidSize)
 	signals = cbind(weightedPrices, pastReturns, arrivalDeparture, volumeImbalance)
 	return(signals)

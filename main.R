@@ -45,7 +45,7 @@ rangeAmounts = c(5, 20, 50, 100)
 listLags = c(1, 20, 50, 100)
 listEwma = c(0, 10, 30)
 rangeAmounts = c(5, 10, 20, 40)
-listLags = c(1, 10)
+listLags = c(1, 10, 200)
 listEwma = c(0, 10)
 #rangeAmounts = c(5, 10, 20)
 #listLags = c(1, 10, 30)
@@ -80,6 +80,10 @@ capLimits = calibrateCapAndFloorsForAllSignals(dataLimits, rangeAmounts, listLag
 cat("\n\n#############   Computing signals for cross-validation ###################\n")
 signals = computeSignalsAndApplyLimits(dataCV, rangeAmounts, listLags, listEwma, capLimits, normalizationType)
 
+
+#signals[,test1:=ifelse(diff_weighted_5_ewma_0*arrivalDeparture.arrival_departure_level1_ewma_10>0,sign(diff_weighted_5_ewma_0) * diff_weighted_5_ewma_0*arrivalDeparture.arrival_departure_level1_ewma_10,0)]
+#signals[,test2:=ifelse(diff_weighted_5_ewma_0*diff_weighted_20_ewma_0>0,sign(diff_weighted_5_ewma_0) * diff_weighted_5_ewma_0*diff_weighted_20_ewma_0,0)]
+#signals[,test3:=ifelse(diff_weighted_5_ewma_0*diff_weighted_40_ewma_0>0,sign(diff_weighted_5_ewma_0) * diff_weighted_5_ewma_0*diff_weighted_40_ewma_0,0)]
 ############ run cross validation #######################
 cat("\n\n#############   Running cross validation ###################")
 crossValidationDfOrig = cbind(signals, yCV)
@@ -119,17 +123,21 @@ for (buck in seq(1,numBucketsVolatility)){
 		squared_error = rbind(squared_error, data.table(error2))
 	}
 	res = apply(squared_error, 2, mean)
-	std = apply(squared_error[seq(1,nrow(squared_error),100),], 2, sd) / nrow(squared_error[seq(1,nrow(squared_error),100),])
+	std = apply(squared_error[seq(1,nrow(squared_error),300),], 2, sd) / nrow(squared_error[seq(1,nrow(squared_error),300),])
 	bestLambda = lambda[which.min(res)]
 	se1Lambda = max(lambda[res < min(res) + std[which.min(res)]])
 	se1LambdaIdx = which(lambda==se1Lambda)
+	rssList = 1 - res/ mean(returns_temps^2)
+	percentLambda = max(lambda[rssList > max(rssList) - 0.001])
+	percentLambdaIdx = which(lambda==percentLambda)
+	
 	#plot(lambda[40:length(lambda)], res[40:length(res)])
+	#plot(lambda[40:length(lambda)], rssList[40:length(rssList)])
 	
-	
-	rsquared   = 1 - res[se1LambdaIdx] / mean(returns_temps^2)
-	coefs      = as.matrix(coef(model)[-1,])[,se1LambdaIdx]
+	rsquared   = 1 - res[percentLambdaIdx] / mean(returns_temps^2)
+	coefs      = as.matrix(coef(model)[-1,])[,percentLambdaIdx]
 	coefsTable[[buck]] = coefs
-	modelPrediction=c(modelPrediction, as.matrix(pred_temp)[,se1LambdaIdx])
+	modelPrediction=c(modelPrediction, as.matrix(pred_temp)[,percentLambdaIdx])
 	actualReturn = c(actualReturn, returns_temps)
 }
 #plot(model$glmnet.fit, "norm",   label=TRUE)
@@ -143,8 +151,9 @@ print(paste0("The explained variance on the test set is ",round(rsquared*100,2),
 
 pred = data.table(as.matrix(crossValidationDfOrig[, !"y"]) %*% as.matrix(coefsTable))
 coefs[order(abs(coefs),decreasing=T)]
+test = lars(as.matrix(training[,!"y"]), training$y, type = "forward.stagewise", normalize = F, intercept = F)
 ################ compute statistics per bucket #################
-finalPred = pred_temp[[names(pred_temp)[which.min(res)]]]
+finalPred = pred_temp[,percentLambdaIdx]
 stats     = data.table(pred=finalPred, ret=returns_temps)
 stats[,bucket:=cut(pred, breaks=c(quantile(pred, probs = seq(0, 1, by = 0.1))))]
 stats[,.(c = cor(pred,ret)), by=bucket]
@@ -155,7 +164,7 @@ results[order(-rank(bucket))]
 cat("\n\n#############  Checking generalization on test set ###################\n")
 test_set = computeSignalsAndApplyLimits(dataTest, rangeAmounts, listLags, listEwma, capLimits, normalizationType)
 test_set = cbind(test_set, yTest)
-model <- glmnet(as.matrix(crossValidationDf[,!"y"]), crossValidationDf$y, alpha = alphaElasticNet, lambda = se1Lambda, standardize = FALSE, intercept=FALSE)
+model <- glmnet(as.matrix(crossValidationDf[,!"y"]), crossValidationDf$y, alpha = alphaElasticNet, lambda = percentLambda, standardize = FALSE, intercept=FALSE)
 finalPrediction = as.matrix(test_set[, !"y"]) %*% as.matrix(coef(model)[-1,])
 #predictions = data.table(as.matrix(test_set[, !"y"]) %*% as.matrix(coefsTable))
 #predictions[, volatility:=computeVolatility(dataTest)]
