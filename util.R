@@ -9,6 +9,7 @@ ewma<-function(x, halfTime = 1, init = x[1]) {
 	}
 	lambda <- 1 - exp(-log(2) / halfTime)
 	rval <- filter(lambda*x,filter=(1-lambda),method="recursive",init=init)
+	return(rval)
 }
 
 rollingFunction <- function(vec, width, FUN) {

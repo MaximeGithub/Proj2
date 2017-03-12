@@ -44,20 +44,21 @@ normalizationType = "standard"  #"standard" or "rolling"
 rangeAmounts = c(5, 20, 50, 100)
 listLags = c(1, 20, 50, 100)
 listEwma = c(0, 10, 30)
-rangeAmounts = c(5, 20)
-listLags = c(1, 20)
+rangeAmounts = c(5, 10, 20, 40)
+listLags = c(1, 10)
 listEwma = c(0, 10)
 #rangeAmounts = c(5, 10, 20)
 #listLags = c(1, 10, 30)
 #listEwma = c(0, 10, 30)
 numBucketsVolatility = 1
-alphaElasticNet = 0 # 1 is lasso
+alphaElasticNet = 0.9 # 1 is lasso
 
 ########### create validation and test sets ##############
 folds <- cut(seq(1,nrow(data)),breaks=20,labels=FALSE)
 capAndLimitFolds = 1:2
-crossValidationFolds = 3:16
+crossValidationFolds = 3:12
 #crossValidationFolds = 2:9 ################################################################ testing purpose only
+falseTestFolds = 13:16
 testingFolds = 17:20
 
 dataLimits = data[folds %in% capAndLimitFolds]
@@ -66,8 +67,12 @@ yLimits = y[folds %in% capAndLimitFolds]
 dataCV = data[folds %in% crossValidationFolds]
 yCV = y[folds %in% crossValidationFolds]
 
-dataTest = data[folds %in% testingFolds]
-yTest = y[folds %in% testingFolds]
+dataTest = data[folds %in% falseTestFolds]
+yTest = y[folds %in% falseTestFolds]
+
+realDataTest = data[folds %in% testingFolds]
+realYTest = y[folds %in% testingFolds]
+
 
 ############# compute limits and signals ####################
 cat("\n\n#############   Calibrating the limits ###################\n")
@@ -78,11 +83,11 @@ signals = computeSignalsAndApplyLimits(dataCV, rangeAmounts, listLags, listEwma,
 ############ run cross validation #######################
 cat("\n\n#############   Running cross validation ###################")
 crossValidationDfOrig = cbind(signals, yCV)
-correl =cor(crossValidationDfOrig)
-correl [!lower.tri(correl )]=0
-predictors = apply(abs(correl),1,max)
-predictors = names(crossValidationDfOrig)[predictors<0.8]
-crossValidationDfOrig = crossValidationDfOrig[,predictors,with=F]
+#correl =cor(crossValidationDfOrig)
+#correl [!lower.tri(correl )]=0
+#predictors = apply(abs(correl),1,max)
+#predictors = names(crossValidationDfOrig)[predictors<0.8]
+#crossValidationDfOrig = crossValidationDfOrig[,predictors,with=F]
 crossValidationDfOrig[["volatility"]] = computeVolatility(dataCV)
 crossValidationDfOrig[["buckets"]] <- cut(crossValidationDfOrig[["volatility"]], breaks = capLimits[["volatility"]], labels = seq(1, numBucketsVolatility))
 #cols = c(names(crossValidationDf)[grep("mid", names(crossValidationDf))],"y")
@@ -101,12 +106,12 @@ for (buck in seq(1,numBucketsVolatility)){
 	lambda=NULL
 	for(i in seq(1,cv_nfolds)){
 		print(i)
-		training <- crossValidationDf[cv_folds!=i]
+		training <- crossValidationDf[cv_folds != i]
 		valid <- crossValidationDf[cv_folds==i]
 		model <- glmnet(as.matrix(training[,!"y"]), training$y, alpha = alphaElasticNet, lambda = lambda, standardize = FALSE, intercept=FALSE)
 		lambda = model$lambda
-		# predictions = as.matrix(valid[, !"returns"]) %*% as.matrix(coef(model)[-1,])
-		predictions = predict(model, as.matrix(valid[, !"y"]))
+		predictions = as.matrix(valid[, !"y"]) %*% as.matrix(coef(model)[-1,])
+		#predictions = predict(model, as.matrix(valid[, !"y"]))
 		error = predictions - valid$y
 		pred_temp <- rbind(pred_temp,predictions)
 		returns_temps <- c(returns_temps, valid$y)
@@ -114,11 +119,11 @@ for (buck in seq(1,numBucketsVolatility)){
 		squared_error = rbind(squared_error, data.table(error2))
 	}
 	res = apply(squared_error, 2, mean)
-	std = apply(squared_error, 2, sd) / nrow(squared_error)
+	std = apply(squared_error[seq(1,nrow(squared_error),100),], 2, sd) / nrow(squared_error[seq(1,nrow(squared_error),100),])
 	bestLambda = lambda[which.min(res)]
 	se1Lambda = max(lambda[res < min(res) + std[which.min(res)]])
 	se1LambdaIdx = which(lambda==se1Lambda)
-	#plot(lambda[80:length(lambda)], res[80:length(res)])
+	#plot(lambda[40:length(lambda)], res[40:length(res)])
 	
 	
 	rsquared   = 1 - res[se1LambdaIdx] / mean(returns_temps^2)
@@ -150,16 +155,16 @@ results[order(-rank(bucket))]
 cat("\n\n#############  Checking generalization on test set ###################\n")
 test_set = computeSignalsAndApplyLimits(dataTest, rangeAmounts, listLags, listEwma, capLimits, normalizationType)
 test_set = cbind(test_set, yTest)
-#model <- glmnet(as.matrix(crossValidationDf[,!"y"]), crossValidationDf$y, alpha = alphaElasticNet, lambda = bestLambda, standardize = FALSE, intercept=FALSE)
-#predictions = as.matrix(test_set[, !"y"]) %*% as.matrix(coef(model)[-1,])
-predictions = data.table(as.matrix(test_set[, !"y"]) %*% as.matrix(coefsTable))
-predictions[, volatility:=computeVolatility(dataTest)]
-predictions[["buckets"]] <- cut(predictions[["volatility"]], breaks = capLimits[["volatility"]], labels = seq(1, numBucketsVolatility))
-predictions[is.na(predictions)] = 1
-idx = predictions[["buckets"]]
-predictions= data.frame(predictions)
-predictions[["final"]] = predictions[cbind(seq_along(idx), idx)]
-finalPrediction = as.numeric(predictions[["final"]])
+model <- glmnet(as.matrix(crossValidationDf[,!"y"]), crossValidationDf$y, alpha = alphaElasticNet, lambda = se1Lambda, standardize = FALSE, intercept=FALSE)
+finalPrediction = as.matrix(test_set[, !"y"]) %*% as.matrix(coef(model)[-1,])
+#predictions = data.table(as.matrix(test_set[, !"y"]) %*% as.matrix(coefsTable))
+#predictions[, volatility:=computeVolatility(dataTest)]
+#predictions[["buckets"]] <- cut(predictions[["volatility"]], breaks = capLimits[["volatility"]], labels = seq(1, numBucketsVolatility))
+#predictions[is.na(predictions)] = 1
+#idx = predictions[["buckets"]]
+#predictions= data.frame(predictions)
+#predictions[["final"]] = predictions[cbind(seq_along(idx), idx)]
+#finalPrediction = as.numeric(predictions[["final"]])
 error = finalPrediction - test_set$y
 error2 = error^2
 varianceExplained = 1 - mean(error2) / mean(test_set$y^2)

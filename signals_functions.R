@@ -12,12 +12,15 @@ createWeightedPrice = function(df_bidRate, df_bidSize, df_askRate, df_askSize, l
 	ptm = Sys.time()
 	df_weightedPrices = data.table(bid_weighted_1=df_bidRate[["bid_price_1"]], ask_weighted_1=df_askRate[["ask_price_1"]])
 	df_weightedPrices[,mid_weighted_1:=(bid_weighted_1+ask_weighted_1)/2]
+	prev_amount = 1
 	for (amount in list_amounts){
 		print(paste("Compute weighted prices for amount",amount))
 		df_weightedPrices[[paste0("bid_weighted_",amount)]] = computeWeightedPrice(df_bidRate, df_bidSize, amount)
 		df_weightedPrices[[paste0("ask_weighted_",amount)]] = computeWeightedPrice(df_askRate, df_askSize, amount)
 		df_weightedPrices[[paste0("mid_weighted_",amount)]] = (df_weightedPrices[[paste0("bid_weighted_",amount)]]+df_weightedPrices[[paste0("ask_weighted_",amount)]]) / 2
-		df_weightedPrices[[paste0("diff_weighted_",amount)]] = df_weightedPrices[[paste0("mid_weighted_",amount)]] - df_weightedPrices[["mid_weighted_1"]]
+		df_weightedPrices[[paste0("diff_weighted_",amount)]] = (df_weightedPrices[[paste0("mid_weighted_",amount)]] - df_weightedPrices[[paste0("mid_weighted_",prev_amount)]])
+		prev_amount = amount
+		#df_weightedPrices[[paste0("diff_weighted_norm_",amount)]] = (df_weightedPrices[[paste0("mid_weighted_",amount)]] - df_weightedPrices[["mid_weighted_1"]]) / (df_weightedPrices[["ask_weighted_1"]] - df_weightedPrices[["bid_weighted_1"]] )
 	}
 	cat(paste("Weighted prices computed in", as.numeric(round(difftime(Sys.time(), ptm,units="secs"),2)), "seconds.\n"))
 	return(df_weightedPrices)
@@ -67,15 +70,15 @@ createArrivalDepartureOld = function(df_askRate, df_askSize, df_bidRate, df_bidS
 createArrivalDeparture = function(df_askRate, df_askSize, df_bidRate, df_bidSize){
 	print("Computing arrival departure signal")
 	ptm = Sys.time()
-	#df_na = data.table(matrix(NA, nrow = 1, ncol = ncol(df_bidSize)))
+	df_na = data.table(matrix(NA, nrow = 1, ncol = ncol(df_bidSize)))
 	
-	#df_askSize[is.na(df_askSize)] = 0
-	#df_bidSize[is.na(df_bidSize)] = 0
-	#df_askRate[is.na(df_askRate)] = Inf
-	#df_bidRate[is.na(df_bidRate)] = 0
+	df_askSize[is.na(df_askSize)] = 0
+	df_bidSize[is.na(df_bidSize)] = 0
+	df_askRate[is.na(df_askRate)] = Inf
+	df_bidRate[is.na(df_bidRate)] = 0
 	
-	#df_previousAskSize = rbindlist(list(data.table(matrix(NA, nrow = 1, ncol = ncol(df_askSize))),df_askSize[2:nrow(df_askSize)]),use.names=F, fill=F, idcol=NULL)
-	#df_previousBidSize = rbindlist(list(data.table(matrix(NA, nrow = 1, ncol = ncol(df_bidSize))),df_bidSize[2:nrow(df_bidSize)]),use.names=F, fill=F, idcol=NULL)
+	df_previousAskSize = rbindlist(list(data.table(matrix(NA, nrow = 1, ncol = ncol(df_askSize))),df_askSize[2:nrow(df_askSize)]),use.names=F, fill=F, idcol=NULL)
+	df_previousBidSize = rbindlist(list(data.table(matrix(NA, nrow = 1, ncol = ncol(df_bidSize))),df_bidSize[2:nrow(df_bidSize)]),use.names=F, fill=F, idcol=NULL)
 	
 	df_diffBidSize = rbindlist(list(data.table(matrix(NA, nrow = 1, ncol = ncol(df_bidSize))),df_bidSize[2:nrow(df_bidSize)] - df_bidSize[1:(nrow(df_bidSize)-1)]),use.names=F, fill=F, idcol=NULL)
 	names(df_diffBidSize) = names(df_bidSize)
@@ -100,7 +103,7 @@ createArrivalDeparture = function(df_askRate, df_askSize, df_bidRate, df_bidSize
 	arrival_departure[is.na(arrival_departure)] = 0
 	#arrival_departure = data.table(t(apply(arrival_departure, 1, cumsum)))
 	names(arrival_departure) = sapply(seq(1,ncol(arrival_departure)),function(x) paste0("arrival_departure_level",x))
-	arrival_departure = arrival_departure[,c(1,4,8)]
+	arrival_departure = arrival_departure[,c(1,2,3)]
 	cat(paste("Arrival departure signal computed in", round(Sys.time() - ptm,2), "seconds.\n"))
 	return (data.table(arrivalDeparture = arrival_departure))
 }
@@ -120,8 +123,12 @@ createfirstLevelImbalance = function(df_askRate, df_askSize, df_bidRate, df_bidS
 createVolumeImbalance = function(df_askSize, df_bidSize){
 	print("Computing volume imbalance")
 	ptm = Sys.time()
-	askCumSize = data.table(t(apply(df_askSize, 1, cumsum)))
-	bidCumSize = data.table(t(apply(df_bidSize, 1, cumsum)))
+	df_askSizeTemp = df_askSize
+	df_bidSizeTemp = df_bidSize
+	df_askSizeTemp[is.na(df_askSizeTemp)] = 0
+	df_bidSizeTemp[is.na(df_bidSizeTemp)] = 0
+	askCumSize = data.table(t(apply(df_askSizeTemp, 1, cumsum)))
+	bidCumSize = data.table(t(apply(df_bidSizeTemp, 1, cumsum)))
 	askCumSize[is.na(askCumSize)] = 0
 	bidCumSize[is.na(bidCumSize)] = 0
 	df_imbalance = -(askCumSize - bidCumSize) / (askCumSize + bidCumSize)
@@ -289,7 +296,7 @@ computeMovingAverage = function(df_signals, vector_ewma){
 			if (halfTime == 0) {
 				df_result[[paste0(col,"_ewma_", halfTime)]] = df_signals[[col]]
 			} else {
-				df_result[[paste0(col,"_ewma_", halfTime)]] = df_signals[[col]] - ewma(df_signals[[col]], halfTime = halfTime)
+				#df_result[[paste0(col,"_ewma_", halfTime)]] = df_signals[[col]] - ewma(df_signals[[col]], halfTime = halfTime)
 				df_result[[paste0(col,"_ewma_", halfTime)]] = ewma(df_signals[[col]], halfTime = halfTime)
 			}
 		}
