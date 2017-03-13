@@ -20,7 +20,6 @@ createWeightedPrice = function(df_bidRate, df_bidSize, df_askRate, df_askSize, l
 		df_weightedPrices[[paste0("mid_weighted_",amount)]] = (df_weightedPrices[[paste0("bid_weighted_",amount)]]+df_weightedPrices[[paste0("ask_weighted_",amount)]]) / 2
 		df_weightedPrices[[paste0("diff_weighted_",amount)]] = (df_weightedPrices[[paste0("mid_weighted_",amount)]] - df_weightedPrices[[paste0("mid_weighted_",prev_amount)]])
 		prev_amount = amount
-		#df_weightedPrices[[paste0("diff_weighted_norm_",amount)]] = (df_weightedPrices[[paste0("mid_weighted_",amount)]] - df_weightedPrices[["mid_weighted_1"]]) / (df_weightedPrices[["ask_weighted_1"]] - df_weightedPrices[["bid_weighted_1"]] )
 	}
 	cat(paste("Weighted prices computed in", as.numeric(round(difftime(Sys.time(), ptm,units="secs"),2)), "seconds.\n"))
 	return(df_weightedPrices)
@@ -40,49 +39,6 @@ createPastReturns = function(df_askRate, df_bidRate, vector_lags){
 	return(df_lags)	
 }
 
-createPastReturnsOld = function(df_weighted, vector_lags){
-	print("Computing past returns")
-	ptm = Sys.time()
-	cols = c(names(df_weighted)[grep("mid_weighted_", names(df_weighted))])
-	df_lags = data.table(index=1:dim(df_weighted)[1])
-	for (col in cols) {
-		print(paste("Compute past returns for column ",col))
-		for (lag in vector_lags){	
-			df_lags[[paste0("diff_",col, "_",lag)]] = c(rep(NA,lag),diff(df_weighted[[col]],lag))
-		}
-	}
-	df_lags[,index:=NULL]
-	cat(paste("Past returns computed in", round(Sys.time() - ptm,2), "seconds.\n"))
-	return(df_lags)	
-}
-
-createArrivalDepartureOld = function(df_askRate, df_askSize, df_bidRate, df_bidSize){
-	print("Computing arrival departure signal")
-	ptm = Sys.time()
-	vector_ask 	   = df_askRate$ask_price_1
-	vector_bid     = df_bidRate$bid_price_1
-	vector_askSize = df_askSize$ask_size_1
-	vector_bidSize = df_bidSize$bid_size_1
-	#vector_shiftedAskSize = c(NA,vector_askSize[1:length(vector_askSize)])
-	#vector_shiftedBidSize = c(NA,vector_bidSize[1:length(vector_bidSize)])
-	diff_ask = c(rep(NA,1),diff(vector_ask,1))
-	diff_bid = c(rep(NA,1),diff(vector_bid,1))
-	diff_ask_size = c(rep(NA,1),diff(vector_askSize,1))
-	diff_bid_size = c(rep(NA,1),diff(vector_bidSize,1))
-	ask_arr = ((diff_ask < 0) | (diff_ask_size > 0 & diff_ask == 0))*1
-	ask_dep = ((diff_ask > 0) | (diff_ask_size < 0 & diff_ask == 0))*1
-	bid_arr = ((diff_bid > 0) | (diff_bid_size > 0 & diff_bid == 0))*1
-	bid_dep = ((diff_bid < 0) | (diff_bid_size < 0 & diff_bid == 0))*1
-	#ask_arr = ifelse(diff_ask < 0, vector_askSize, ifelse(diff_ask_size > 0 & diff_ask == 0,diff_ask_size, 0))
-	#ask_dep = ifelse(diff_ask > 0, vector_shiftedAskSize,ifelse(diff_ask_size < 0 & diff_ask == 0, -diff_ask_size, 0))
-	#bid_arr = ifelse(diff_bid > 0, vector_bidSize, ifelse(diff_bid_size > 0 & diff_bid == 0,diff_bid_size,0))
-	#bid_dep = ifelse(diff_bid < 0, vector_shiftedBidSize, ifelse(diff_bid_size < 0 & diff_bid == 0, -diff_bid_size,0))
-	arrival_departure = - (ask_arr - ask_dep - bid_arr + bid_dep)
-	cat(paste("Arrival departure signal computed in", round(Sys.time() - ptm,2), "seconds.\n"))
-	return (data.table(arrivalDeparture = arrival_departure))
-}
-
-
 createArrivalDeparture = function(df_askRate, df_askSize, df_bidRate, df_bidSize){
 	print("Computing arrival departure signal")
 	ptm = Sys.time()
@@ -92,10 +48,7 @@ createArrivalDeparture = function(df_askRate, df_askSize, df_bidRate, df_bidSize
 	df_bidSize[is.na(df_bidSize)] = 0
 	df_askRate[is.na(df_askRate)] = Inf
 	df_bidRate[is.na(df_bidRate)] = 0
-	
-	df_previousAskSize = rbindlist(list(data.table(matrix(NA, nrow = 1, ncol = ncol(df_askSize))),df_askSize[2:nrow(df_askSize)]),use.names=F, fill=F, idcol=NULL)
-	df_previousBidSize = rbindlist(list(data.table(matrix(NA, nrow = 1, ncol = ncol(df_bidSize))),df_bidSize[2:nrow(df_bidSize)]),use.names=F, fill=F, idcol=NULL)
-	
+
 	df_diffBidSize = rbindlist(list(data.table(matrix(NA, nrow = 1, ncol = ncol(df_bidSize))),df_bidSize[2:nrow(df_bidSize)] - df_bidSize[1:(nrow(df_bidSize)-1)]),use.names=F, fill=F, idcol=NULL)
 	names(df_diffBidSize) = names(df_bidSize)
 	df_diffAskSize = rbindlist(list(data.table(matrix(NA, nrow = 1, ncol = ncol(df_askSize))),df_askSize[2:nrow(df_askSize)] - df_askSize[1:(nrow(df_askSize)-1)]),use.names=F, fill=F, idcol=NULL)
@@ -117,17 +70,9 @@ createArrivalDeparture = function(df_askRate, df_askSize, df_bidRate, df_bidSize
 		bid_dep[bid_dep[[i-1]]!=0, seq(i,15)] = 0
 	}
 	
-		
-	#ask_arr = ((df_diffAskRate < 0) *  df_askSize) + (df_diffAskSize > 0 & (df_diffAskRate == 0)) * df_diffAskSize
-	#ask_dep = ((df_diffAskRate > 0) *  df_previousAskSize) - (df_diffAskSize < 0 & (df_diffAskRate == 0)) * df_diffAskSize
-	#bid_arr = ((df_diffBidRate > 0) *  df_bidSize) + (df_diffBidSize > 0 & (df_diffBidRate == 0)) * df_diffBidSize
-	#bid_dep = ((df_diffBidRate < 0) *  df_bidSize) - (df_diffBidSize < 0 & (df_diffBidRate == 0)) * df_diffBidSize
-	
 	arrival_departure = data.table(- (ask_arr - ask_dep - bid_arr + bid_dep))
 	arrival_departure[is.na(arrival_departure)] = 0
-	#arrival_departure = data.table(t(apply(arrival_departure, 1, cumsum)))
 	names(arrival_departure) = sapply(seq(1,ncol(arrival_departure)),function(x) paste0("arrival_departure_level",x))
-	arrival_departure = arrival_departure[,c(1,2,3)]
 	arrival_departure = arrival_departure[,c(1)]
 	cat(paste("Arrival departure signal computed in", round(Sys.time() - ptm,2), "seconds.\n"))
 	return (arrival_departure)
@@ -161,15 +106,6 @@ createVolumeImbalance = function(df_askSize, df_bidSize){
 	names(df_imbalance) = sapply(seq(1,1), function(x) paste0("volume_imbalance_", x))
 	cat(paste("Volume imbalance computed in", round(Sys.time() - ptm,2), "seconds.\n"))
 	return (df_imbalance)
-}
-
-estimateAggressiveOrders = function(df_bidRate, df_bidSize, df_askRate, df_askSize){
-	idxBuy = c(df_bidRate$bid_price_1[2:dim(df_bidRate)[1]] >= df_askRate$ask_price_1[1:(dim(df_askRate)[1]-1)],F)
-	amountBuy = head(c(0, idxBuy * df_askSize$ask_size_1),-1)
-	idxSell = c(df_askRate$ask_price_1[2:dim(df_askRate)[1]] <= df_bidRate$bid_price_1[1:(dim(df_bidRate)[1]-1)],F)
-	amountSell = head(c(0, idxSell * df_bidSize$bid_size_1),-1)
-	amountTraded = amountBuy - amountSell
-	return(data.table(aggressiveOrders = amountTraded))
 }
 
 applyLimitsToWeightedPrices = function(df_weightedPrices, list_limits){
@@ -227,8 +163,6 @@ calibrateCapAndFloorsForAllSignals = function(df_data, vector_rangeAmounts, vect
 	capSignals = capFloorColumns(normalizedSignals, names(normalizedSignals), signalsLimits)
 	capSignals[is.na(capSignals)] = 0
 	listLimits = getLimitsFromFinalSignals(cappedBasicSignals, capSignals)
-	volatilityBuckets = computeVolatilityBuckets(df_data, numBucketsVolatility)
-	listLimits["volatility"] = list(volatilityBuckets)
 	if (str_normalizationType == "standard") {listLimits["stdev"] = list(list_stdev)}
 	return(listLimits)
 }
@@ -239,10 +173,8 @@ createBasicSignals = function(df_data, vector_rangeAmounts, vector_lags){
 	df_bidSize = df_data[,c(names(df_data)[grep("bid_size", names(df_data))]),with=F]
 	df_askSize = df_data[,c(names(df_data)[grep("ask_size", names(df_data))]),with=F]
 	weightedPrices = createWeightedPrice(df_bidRate, df_bidSize, df_askRate, df_askSize, vector_rangeAmounts)
-	#pastReturns = createPastReturns(weightedPrices, vector_lags)
 	pastReturns = createPastReturns(df_askRate, df_bidRate, vector_lags)
 	arrivalDeparture = createArrivalDeparture(df_askRate, df_askSize, df_bidRate, df_bidSize)
-	#obImbalance = createLevelImbalance(df_askRate, df_askSize, df_bidRate, df_bidSize)
 	volumeImbalance = createVolumeImbalance(df_askSize, df_bidSize)
 	signals = cbind(weightedPrices, pastReturns, arrivalDeparture, volumeImbalance)
 	return(signals)
@@ -319,24 +251,7 @@ computeSignalsAndApplyLimits = function(df_data, vector_rangeAmounts, vector_lag
 	normalizedSignals = normalizeSignals(movingAverageSignals, str_normalizationType, list_stdev)
 	capSignals = capFloorColumns(normalizedSignals, names(normalizedSignals), list_limits[["normalized"]])
 	capSignals[is.na(capSignals)] = 0
-	#return(movingAverageSignals) ##############careful
 	return(capSignals)
-}
-
-computeMovingAverageOld = function(df_signals, vector_ewma){
-	df_result = data.table(index = 1:nrow(df_signals))
-	for (halfTime in vector_ewma){
-		for (col in names(df_signals)){
-			if (halfTime == 0) {
-				df_result[[paste0(col,"_ewma_", halfTime)]] = df_signals[[col]]
-			} else {
-				#df_result[[paste0(col,"_ewma_", halfTime)]] = df_signals[[col]] - ewma(df_signals[[col]], halfTime = halfTime)
-				df_result[[paste0(col,"_ewma_", halfTime)]] = ewma(df_signals[[col]], halfTime = halfTime)
-			}
-		}
-	}
-	df_result[,index:=NULL]
-	return(df_result)
 }
 
 computeMovingAverage = function(df_signals, vector_ewma){
@@ -347,28 +262,12 @@ computeMovingAverage = function(df_signals, vector_ewma){
 				df_result[[paste0(col,"_ewma_", halfTime)]] = df_signals[[col]]
 			} else {
 				df_result[[paste0(col,"_ewma_", halfTime)]] = ewma(df_signals[[col]], halfTime = prev_ewma) - ewma(df_signals[[col]], halfTime = halfTime)
-				#df_result[[paste0(col,"_ewma_", halfTime)]] = ewma(df_signals[[col]], halfTime = halfTime)
 			}
 			prev_ewma = halfTime
 		}
 	}
 	df_result[,index:=NULL]
 	return(df_result)
-}
-
-computeVolatilityBuckets = function(df_data, numBucketsVolatility){
-	volatility = computeVolatility(df_data)
-	q = quantile(volatility,seq(0,1, 1/numBucketsVolatility),na.rm=T)
-	return(q)
-}
-
-computeVolatility = function(df_data){
-	df_askRate = df_data[,c(names(df_data)[grep("ask_price", names(df_data))]),with=F]
-	df_bidRate = df_data[,c(names(df_data)[grep("bid_price", names(df_data))]),with=F]
-	mid = (df_bidRate[["bid_price_1"]] + df_askRate[["ask_price_1"]]) / 2
-	return = c(NA, diff(mid))
-	volatility = runSD(return, 500)
-	return(volatility)
 }
 
 computeStandardDev = function(df_signals){
