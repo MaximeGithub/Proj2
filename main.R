@@ -37,20 +37,20 @@ y       = data[["y"]]
 names(y) = c("y")
 data = mergeOBintoSingleDf(askRate, askSize, bidRate, bidSize)
 rm(list=c("askRate", "bidRate", "askSize", "bidSize"))
+
 ############ parameters ################
 normalizationType = "standard"  #"standard" or "rolling"
-rangeAmounts = c(5, 10, 15, 20, 30, 40, 50, 60, 70)
+rangeAmounts = c(5, 10, 15, 20, 25, 30, 35, 40, 50, 60, 70)
 listLags = c(1, 10, 200)
-listEwma = c(0, 10, 50, 100, 200, 500, 1000, 2000)
+listEwma = c(0, 10, 50, 100, 200, 500)
 numBucketsVolatility = 1
 alphaElasticNet = 0.9 # 1 is lasso
 
 ########### create validation and test sets ##############
 folds <- cut(seq(1,nrow(data)),breaks=20,labels=FALSE)
 capAndLimitFolds = 1:2
-crossValidationFolds = 3:12
-falseTestFolds = 13:16
-testingFolds = 17:20
+crossValidationFolds = 3:16
+testFolds = 17:20
 
 dataLimits = data[folds %in% capAndLimitFolds]
 yLimits = y[folds %in% capAndLimitFolds]
@@ -58,11 +58,8 @@ yLimits = y[folds %in% capAndLimitFolds]
 dataCV = data[folds %in% crossValidationFolds]
 yCV = y[folds %in% crossValidationFolds]
 
-dataTest = data[folds %in% falseTestFolds]
-yTest = y[folds %in% falseTestFolds]
-
-realDataTest = data[folds %in% testingFolds]
-realYTest = y[folds %in% testingFolds]
+dataTest = data[folds %in% testFolds]
+yTest = y[folds %in% testFolds]
 
 ############# compute limits and signals ####################
 cat("\n\n#############   Calibrating the limits ###################\n")
@@ -120,7 +117,7 @@ print(paste0("The explained variance on the test set is ",round(varianceExplaine
 
 ############## recalibrate model on whole dataset ################
 cat("\n\n#############  Recalibrating model on whole dataset ###################\n")
-signals = computeSignalsAndApplyLimits(data, rangeAmounts, listLags, listEwma, capLimits)
+signals = computeSignalsAndApplyLimits(data, rangeAmounts, listLags, listEwma, capLimits, normalizationType)
 model   = glmnet(as.matrix(signals), y$y, alpha = alphaElasticNet, lambda = percentLambda, standardize = FALSE, intercept=FALSE)
 coefs   = as.matrix(coef(model)[-1,])
 rm(list=c("data", "signals"))
@@ -136,11 +133,9 @@ y        = testData[["y"]]
 names(y) = c("y")
 testData = mergeOBintoSingleDf(askRate, askSize, bidRate, bidSize)
 
-signals = computeSignalsAndApplyLimits(testData, rangeAmounts, listLags, listEwma, capLimits)
+signals = computeSignalsAndApplyLimits(testData, rangeAmounts, listLags, listEwma, capLimits, normalizationType)
 predictions = as.matrix(signals) %*% coefs
 varianceExplained = 1 - mean((predictions-y)^2) / mean(y^2)
 print(paste0("The explained variance on the test set is ",round(varianceExplained*100,2),"%."))
-
-
 
 
