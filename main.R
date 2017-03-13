@@ -44,9 +44,9 @@ normalizationType = "standard"  #"standard" or "rolling"
 rangeAmounts = c(5, 20, 50, 100)
 listLags = c(1, 20, 50, 100)
 listEwma = c(0, 10, 30)
-rangeAmounts = c(5, 10, 20, 40)
+rangeAmounts = c(5, 10, 15, 20, 30, 40, 50, 60, 70)
 listLags = c(1, 10, 200)
-listEwma = c(0, 10)
+listEwma = c(0, 10, 50, 100, 200, 500, 1000, 2000)
 #rangeAmounts = c(5, 10, 20)
 #listLags = c(1, 10, 30)
 #listEwma = c(0, 10, 30)
@@ -74,6 +74,16 @@ realDataTest = data[folds %in% testingFolds]
 realYTest = y[folds %in% testingFolds]
 
 
+liquidityStrength = function(df_askRate, df_askSize, df_bidRate, df_bidSize){
+	askStrength = ((df_askRate * 10) %% 10) != 5 
+	bidStrength = ((df_bidRate * 10) %% 10) != 5
+	return(data.table(levelStrength = askStrength-bidStrength))
+}
+#data = cbind(dataLimits, yLimits)
+#
+#data[,topAsk:=topAsk]
+#topBid = (data$bid_price_1 * 10) %% 10
+#data[,topBid:=topBid]
 ############# compute limits and signals ####################
 cat("\n\n#############   Calibrating the limits ###################\n")
 capLimits = calibrateCapAndFloorsForAllSignals(dataLimits, rangeAmounts, listLags, listEwma, numBucketsVolatility, normalizationType)
@@ -131,7 +141,7 @@ for (buck in seq(1,numBucketsVolatility)){
 	percentLambda = max(lambda[rssList > max(rssList) - 0.001])
 	percentLambdaIdx = which(lambda==percentLambda)
 	
-	#plot(lambda[40:length(lambda)], res[40:length(res)])
+	#plot(lambda[20:length(lambda)], res[20:length(res)])
 	#plot(lambda[40:length(lambda)], rssList[40:length(rssList)])
 	
 	rsquared   = 1 - res[percentLambdaIdx] / mean(returns_temps^2)

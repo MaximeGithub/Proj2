@@ -105,10 +105,18 @@ createArrivalDeparture = function(df_askRate, df_askSize, df_bidRate, df_bidSize
 	df_diffAskRate = rbindlist(list(data.table(matrix(NA, nrow = 1, ncol = ncol(df_askRate))),df_askRate[2:nrow(df_askRate)] - df_askRate[1:(nrow(df_askRate)-1)]),use.names=F, fill=F, idcol=NULL)
 	names(df_diffAskRate) = names(df_askRate)
 	
-	ask_arr = ((df_diffAskRate < 0) | (df_diffAskSize > 0 & df_diffAskRate == 0))*1
-	ask_dep = ((df_diffAskRate > 0) | (df_diffAskSize < 0 & df_diffAskRate == 0))*1
-	bid_arr = ((df_diffBidRate > 0) | (df_diffBidSize > 0 & df_diffBidRate == 0))*1
-	bid_dep = ((df_diffBidRate < 0) | (df_diffBidSize < 0 & df_diffBidRate == 0))*1
+	ask_arr = data.table(((df_diffAskRate < 0) | (df_diffAskSize > 0 & df_diffAskRate == 0))*1)
+	ask_dep = data.table(((df_diffAskRate > 0) | (df_diffAskSize < 0 & df_diffAskRate == 0))*1)
+	bid_arr = data.table(((df_diffBidRate > 0) | (df_diffBidSize > 0 & df_diffBidRate == 0))*1)
+	bid_dep = data.table(((df_diffBidRate < 0) | (df_diffBidSize < 0 & df_diffBidRate == 0))*1)
+	
+	for (i in seq(2, 15)){
+		ask_arr[ask_arr[[i-1]]!=0, seq(i,15)] = 0
+		ask_dep[ask_dep[[i-1]]!=0, seq(i,15)] = 0
+		bid_arr[bid_arr[[i-1]]!=0, seq(i,15)] = 0
+		bid_dep[bid_dep[[i-1]]!=0, seq(i,15)] = 0
+	}
+	
 		
 	#ask_arr = ((df_diffAskRate < 0) *  df_askSize) + (df_diffAskSize > 0 & (df_diffAskRate == 0)) * df_diffAskSize
 	#ask_dep = ((df_diffAskRate > 0) *  df_previousAskSize) - (df_diffAskSize < 0 & (df_diffAskRate == 0)) * df_diffAskSize
@@ -120,6 +128,7 @@ createArrivalDeparture = function(df_askRate, df_askSize, df_bidRate, df_bidSize
 	#arrival_departure = data.table(t(apply(arrival_departure, 1, cumsum)))
 	names(arrival_departure) = sapply(seq(1,ncol(arrival_departure)),function(x) paste0("arrival_departure_level",x))
 	arrival_departure = arrival_departure[,c(1,2,3)]
+	arrival_departure = arrival_departure[,c(1)]
 	cat(paste("Arrival departure signal computed in", round(Sys.time() - ptm,2), "seconds.\n"))
 	return (arrival_departure)
 }
@@ -147,10 +156,20 @@ createVolumeImbalance = function(df_askSize, df_bidSize){
 	bidCumSize[is.na(bidCumSize)] = 0
 	df_imbalance = -(askCumSize - bidCumSize) / (askCumSize + bidCumSize)
 	df_imbalance=df_imbalance[,1:5]
+	df_imbalance=df_imbalance[,1]
 	df_imbalance[is.na(df_imbalance)]=0
-	names(df_imbalance) = sapply(seq(1,5), function(x) paste0("volume_imbalance_", x))
+	names(df_imbalance) = sapply(seq(1,1), function(x) paste0("volume_imbalance_", x))
 	cat(paste("Volume imbalance computed in", round(Sys.time() - ptm,2), "seconds.\n"))
 	return (df_imbalance)
+}
+
+estimateAggressiveOrders = function(df_bidRate, df_bidSize, df_askRate, df_askSize){
+	idxBuy = c(df_bidRate$bid_price_1[2:dim(df_bidRate)[1]] >= df_askRate$ask_price_1[1:(dim(df_askRate)[1]-1)],F)
+	amountBuy = head(c(0, idxBuy * df_askSize$ask_size_1),-1)
+	idxSell = c(df_askRate$ask_price_1[2:dim(df_askRate)[1]] <= df_bidRate$bid_price_1[1:(dim(df_bidRate)[1]-1)],F)
+	amountSell = head(c(0, idxSell * df_bidSize$bid_size_1),-1)
+	amountTraded = amountBuy - amountSell
+	return(data.table(aggressiveOrders = amountTraded))
 }
 
 applyLimitsToWeightedPrices = function(df_weightedPrices, list_limits){
@@ -304,7 +323,7 @@ computeSignalsAndApplyLimits = function(df_data, vector_rangeAmounts, vector_lag
 	return(capSignals)
 }
 
-computeMovingAverage = function(df_signals, vector_ewma){
+computeMovingAverageOld = function(df_signals, vector_ewma){
 	df_result = data.table(index = 1:nrow(df_signals))
 	for (halfTime in vector_ewma){
 		for (col in names(df_signals)){
@@ -314,6 +333,23 @@ computeMovingAverage = function(df_signals, vector_ewma){
 				#df_result[[paste0(col,"_ewma_", halfTime)]] = df_signals[[col]] - ewma(df_signals[[col]], halfTime = halfTime)
 				df_result[[paste0(col,"_ewma_", halfTime)]] = ewma(df_signals[[col]], halfTime = halfTime)
 			}
+		}
+	}
+	df_result[,index:=NULL]
+	return(df_result)
+}
+
+computeMovingAverage = function(df_signals, vector_ewma){
+	df_result = data.table(index = 1:nrow(df_signals))
+	for (col in names(df_signals)){
+		for (halfTime in vector_ewma){
+			if (halfTime == 0) {
+				df_result[[paste0(col,"_ewma_", halfTime)]] = df_signals[[col]]
+			} else {
+				df_result[[paste0(col,"_ewma_", halfTime)]] = ewma(df_signals[[col]], halfTime = prev_ewma) - ewma(df_signals[[col]], halfTime = halfTime)
+				#df_result[[paste0(col,"_ewma_", halfTime)]] = ewma(df_signals[[col]], halfTime = halfTime)
+			}
+			prev_ewma = halfTime
 		}
 	}
 	df_result[,index:=NULL]
